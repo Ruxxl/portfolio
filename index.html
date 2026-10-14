@@ -170,9 +170,78 @@ button{font:inherit;color:inherit;cursor:pointer}
   .mp-side{display:none}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* экран первой загрузки: страница тяжёлая (проекты упакованы внутрь), пока они качаются — показываем прогресс */
+.boot{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--bg);padding:24px;transition:opacity .45s ease,visibility .45s}
+.boot.done{opacity:0;visibility:hidden}
+.boot-card{width:min(420px,100%);display:grid;gap:22px;justify-items:center;text-align:center}
+.boot-mark{position:relative;width:76px;height:76px;border-radius:22px;background:var(--accent);color:#fff;display:grid;place-items:center;font:600 26px/1 var(--f-display);letter-spacing:.02em;box-shadow:0 14px 34px color-mix(in srgb,var(--accent) 35%,transparent)}
+.boot-mark::after{content:"";position:absolute;inset:-7px;border-radius:27px;border:2px solid var(--accent);opacity:.25;animation:boot-pulse 1.6s ease-in-out infinite}
+@keyframes boot-pulse{50%{transform:scale(1.07);opacity:.05}}
+.boot h1{font:700 24px/1.15 var(--f-display);margin:0;letter-spacing:-.01em}
+.boot p{margin:6px 0 0;color:var(--muted);font-size:14px}
+.boot-bar{width:100%;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.boot-bar i{position:relative;display:block;height:100%;width:4%;border-radius:3px;background:var(--accent);transition:width .35s ease;overflow:hidden}
+.boot-bar i::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);transform:translateX(-100%);animation:boot-shine 1.3s ease-in-out infinite}
+@keyframes boot-shine{to{transform:translateX(100%)}}
+.boot-status{display:flex;justify-content:space-between;width:100%;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:-12px}
+.boot-status b{font-weight:400;color:var(--ink)}
+.boot-list{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;min-height:26px}
+.boot-list span{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);opacity:.45;transition:opacity .3s,color .3s,border-color .3s}
+.boot-list span.ok{opacity:1;color:var(--ink);border-color:var(--accent)}
+.boot-list span.ok::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--pass);margin-right:6px;vertical-align:1px}
 </style>
 </head>
 <body>
+<div class="boot" id="boot" role="status" aria-live="polite">
+  <div class="boot-card">
+    <div class="boot-mark" aria-hidden="true">ИР</div>
+    <div>
+      <h1>Портфолио · Исин Руслан</h1>
+      <p>Lead QA Engineer · проекты запускаются прямо на странице</p>
+    </div>
+    <div class="boot-bar"><i id="bootBar"></i></div>
+    <div class="boot-status"><span id="bootText">Загружаю проекты…</span><b id="bootPct">0%</b></div>
+    <div class="boot-list" id="bootList"></div>
+  </div>
+</div>
+<script>
+/* Прогресс — по тому, сколько упакованных проектов уже скачано и разобрано браузером */
+(function(){
+  var NAMES = [['ielts','Assel IELTS'],['prime-shop','Prime Store'],['2gis','2GIS Scraper'],['qazauto','QazAuto.Shop'],['isntest','ISN Test AI'],
+               ['miniapp','QA Bot Console'],['gamif','Геймификация'],['zerdeli-crm','Zerdeli-Capital']];
+  var list = document.getElementById('bootList'), bar = document.getElementById('bootBar'), txt = document.getElementById('bootText'), pct = document.getElementById('bootPct');
+  NAMES.forEach(function(n){ var s = document.createElement('span'); s.textContent = n[1]; s.dataset.pk = n[0]; list.appendChild(s); });
+  // Размеры упакованных проектов — прогресс по объёму, а не по штукам (крупные проекты весят в разы больше)
+  var SIZE = {"ielts": 137848, "prime-shop": 152304, "prime-crm": 154776, "2gis": 13068, "qazauto": 21356, "isntest": 39700, "miniapp": 24696, "gamif": 7097716, "zerdeli-crm": 1603934, "zerdeli-miniapp": 1573450};
+  var total = Object.keys(SIZE).length, TOTAL = 0; for (var k in SIZE) TOTAL += SIZE[k];
+  var PK_ORDER = Object.keys(SIZE), lastBytes = 0, lastT = Date.now();
+  var t0 = Date.now(), timer = setInterval(tick, 120);
+  function tick(){
+    // блок скачан целиком, когда браузер уже разобрал следующий за ним элемент
+    var done = function(el){ return !!(el && el.nextElementSibling); };
+    var els = [].filter.call(document.querySelectorAll('script[id^="pk-"]'), done), got = els.length;
+    var bytes = els.reduce(function(a, el){ return a + (SIZE[el.id.slice(3)] || TOTAL / total); }, 0);
+    list.querySelectorAll('span').forEach(function(s){ if (done(document.getElementById('pk-' + s.dataset.pk))) s.classList.add('ok'); });
+    // внутри крупного блока ползём плавно по измеренной скорости, но не дальше конца этого блока
+    var nowT = Date.now();
+    if (bytes !== lastBytes) { lastBytes = bytes; lastT = nowT; }
+    // скорость — по уже докачанным блокам (от старта до момента, когда закончился последний)
+    var rate = bytes / Math.max(1, lastT - t0);
+    var next = PK_ORDER.find(function(id){ var el = document.getElementById('pk-' + id); return !done(el); });
+    var est = next ? Math.min(SIZE[next] * 0.95, rate * (nowT - lastT)) : 0;
+    var p = Math.min(96, Math.round(4 + (bytes + est) / TOTAL * 92));
+    bar.style.width = p + '%'; pct.textContent = p + '%';
+    txt.textContent = got ? 'Загружено проектов: ' + Math.min(got, total) + ' из ' + total : 'Загружаю проекты…';
+  }
+  window.__bootDone = function(){
+    clearInterval(timer); tick();
+    bar.style.width = '100%'; pct.textContent = '100%'; txt.textContent = 'Готово';
+    // если всё пришло из кэша мгновенно — не мигаем экраном
+    setTimeout(function(){ document.getElementById('boot').classList.add('done'); }, Date.now() - t0 < 300 ? 0 : 250);
+  };
+})();
+</script>
 <header class="top">
   <div class="who">
     <h1>Портфолио · Исин Руслан</h1>
@@ -547,6 +616,7 @@ function mpView(){
 const start = (location.hash || '').slice(1);
 let last = null; try { last = localStorage.getItem('stand-last'); } catch(e){}
 select(P.some(p=>p.id===start) ? start : (last && P.some(p=>p.id===last) ? last : P[0].id), false);
+window.__bootDone && window.__bootDone();
 </script>
 </body>
 </html>
